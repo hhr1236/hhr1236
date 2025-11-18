@@ -254,10 +254,16 @@ class ShipScheduler:
         self.ship_agents = {}
         for name, data in self.initial_ships.items():
             initial_coord = data['platform']
-            platform_name = next((p_name for p_name, p_coord in self.coords.items() if p_coord == initial_coord),
-                                 f"COORD_{initial_coord[0]}_{initial_coord[1]}")
-            self.ship_agents[name] = {'id': name, 'current_platform': platform_name,
-                                      'docked_platforms': {platform_name}, 'assigned_tasks': [], 'is_active': False}
+            # 直接使用坐标作为当前位置，而不是必须匹配平台名称
+            # 如果坐标匹配某个平台，则使用平台名称；否则使用坐标本身
+            platform_name = next((p_name for p_name, p_coord in self.coords.items() if p_coord == initial_coord), None)
+            current_position = platform_name if platform_name else initial_coord
+            
+            # 初始化停靠平台集合（只有当位置是平台名称时才添加）
+            initial_docked = {platform_name} if platform_name else set()
+            
+            self.ship_agents[name] = {'id': name, 'current_platform': current_position,
+                                      'docked_platforms': initial_docked, 'assigned_tasks': [], 'is_active': False}
 
         personnel_tasks, p_task_map = self._generate_tasks('PERSONNEL')
         if personnel_tasks:
@@ -321,11 +327,25 @@ class ShipScheduler:
         remaining = cargo_tasks.copy()
         for t_id, task in list(remaining.items()):
             origin = task['origin']
+            origin_coord = self.coords.get(origin)
+            
             for agent in self.ship_agents.values():
                 initial_coord = self.initial_ships[agent['id']]['platform']
-                initial_platform_name = next(
-                    (p_name for p_name, p_coord in self.coords.items() if p_coord == initial_coord), None)
-                if initial_platform_name == origin and task not in agent['assigned_tasks']:
+                
+                # 检查船舶初始位置是否在取货点
+                # 方法1: 船舶位置是平台名称且匹配
+                # 方法2: 船舶位置是坐标且与取货点坐标匹配
+                is_at_origin = False
+                current_pos = agent.get('initial_position', initial_coord)  # 使用初始坐标
+                
+                if isinstance(current_pos, str) and current_pos == origin:
+                    is_at_origin = True
+                elif isinstance(current_pos, tuple) and origin_coord and current_pos == origin_coord:
+                    is_at_origin = True
+                elif initial_coord == origin_coord:
+                    is_at_origin = True
+                    
+                if is_at_origin and task not in agent['assigned_tasks']:
                     agent['assigned_tasks'].append({**task, 'is_zero_cost': True})
                     agent['docked_platforms'].update({task['origin'], task['destination']})
                     print(
