@@ -77,6 +77,70 @@ def line_equation_numba(point1, point2):
     return m, b
 
 
+@njit
+def CPA(own_ship, tar_ship):
+    """
+    计算TCPA和DCPA
+    
+    参数:
+        own_ship: 本船状态 [x, y, course, u, v, r]
+        tar_ship: 目标船状态 [x, y, course, u, v, r]
+    
+    返回:
+        (TCPA, DCPA): 最近会遇时间和最近会遇距离
+    """
+    x_own = own_ship[0]       # 本船坐标
+    y_own = own_ship[1]
+    c_own = own_ship[2]
+    u_own = own_ship[3]
+    v_own = own_ship[4]
+    r_own = own_ship[5]
+
+    x_tar = tar_ship[0]       # 他船坐标
+    y_tar = tar_ship[1]
+    c_tar = tar_ship[2]
+    u_tar = tar_ship[3]
+    v_tar = tar_ship[4]
+    r_tar = tar_ship[5]
+
+    delta_x = x_tar - x_own
+    delta_y = y_tar - y_own
+    D = sqrt(delta_x**2 + delta_y**2)
+    
+    if D < 1e-6:  # 避免除零
+        return 0.0, 0.0
+    
+    if delta_y >= 0:
+        TB = sin(delta_x / D) if abs(delta_x / D) <= 1.0 else pi / 2
+    else:
+        TB = pi - (sin(delta_x / D) if abs(delta_x / D) <= 1.0 else pi / 2)
+    if TB < 0:
+        TB += 2 * pi
+
+    delta_u = v_tar * sin(c_tar) - v_own * sin(c_own)
+    delta_v = v_tar * cos(c_tar) - v_own * cos(c_own)
+    RV = sqrt(delta_u**2 + delta_v**2)
+    
+    if RV < 1e-6:  # 相对速度接近零
+        return float('inf'), D
+    
+    if delta_v >= 0:
+        RC = sin(delta_u / RV) if abs(delta_u / RV) <= 1.0 else pi / 2
+    else:
+        RC = pi - (sin(delta_u / RV) if abs(delta_u / RV) <= 1.0 else pi / 2)
+    if RC < 0:
+        RC += 2 * pi
+
+    TCPA = -(delta_x * delta_u + delta_y * delta_v) / (delta_u**2 + delta_v**2)
+    
+    if TCPA < 0:  # 如果TCPA为负，表示目标船正在远离
+        DCPA = D
+    else:
+        DCPA = sqrt((delta_x + delta_u * TCPA)**2 + (delta_y + delta_v * TCPA)**2)
+
+    return TCPA, round(DCPA, 1)
+
+
 # ============================================================================
 # 策略1: 最小改向角策略
 # ============================================================================
@@ -251,23 +315,21 @@ def strategy_comprehensive_score(
     策略4: 综合评分策略（推荐使用）
     
     综合考虑多个因素，为每个安全角度计算评分：
-    1. 改向成本（越小越好）
-    2. 岸壁安全裕度（离岸距离越大越好）
-    3. 避让效果（与目标船距离越大越好）
-    4. 连续性奖励（在连续区间中部的角度得分更高）
+    1. 改向成本（越小越好）- 改向角度越小，操纵成本越低
+    2. 岸壁安全裕度（离岸距离越大越好）- 考虑改向角度大会更靠近边界的影响
+    3. 避让效果（基于TCPA和DCPA）- 使用TCPA和DCPA评估避让效果
     
     参数:
         safe_angles: 所有安全的改向角度列表
-        ship_state: 当前船舶状态 [x, y, course, ...]
-        target_state: 目标船状态 [x, y, course, ...]
+        ship_state: 当前船舶状态 [x, y, course, u, v, r]
+        target_state: 目标船状态 [x, y, course, u, v, r]
         bank_p1, bank_p2: 岸线两点
         RR1, RR2: 岸壁风险参数
         original_course: 原定航向
         weights: 各因素权重字典，默认为 {
-            'deviation': 0.3,  # 改向成本
-            'bank_safety': 0.3,  # 岸壁安全
-            'collision_safety': 0.25,  # 碰撞安全
-            'continuity': 0.15  # 连续性
+            'deviation': 0.35,  # 改向成本
+            'bank_safety': 0.35,  # 岸壁安全
+            'collision_safety': 0.30  # 碰撞安全（基于TCPA/DCPA）
         }
     
     返回:
@@ -276,86 +338,81 @@ def strategy_comprehensive_score(
     if not safe_angles:
         return None, "无可用的安全角度", {}
     
-    # 默认权重
+    # 默认权重（去掉连续性，重新分配权重）
     if weights is None:
         weights = {
-            'deviation': 0.3,
-            'bank_safety': 0.3,
-            'collision_safety': 0.25,
-            'continuity': 0.15
+            'deviation': 0.35,
+            'bank_safety': 0.35,
+            'collision_safety': 0.30
         }
     
     scores = {}
     line_m, line_b = line_equation_numba(bank_p1, bank_p2)
-    safe_angles_sorted = sorted(safe_angles)
+    
+    # 预先计算一些参数
+    max_angle = max(safe_angles)
+    min_angle = min(safe_angles)
     
     for angle in safe_angles:
         score_details = {}
         
         # 1. 改向成本评分（越小越好）
         # 归一化到[0,1]，最小改向得1分，最大改向得0分
-        max_angle = max(safe_angles)
-        min_angle = min(safe_angles)
         if max_angle > min_angle:
             deviation_score = 1.0 - (angle - min_angle) / (max_angle - min_angle)
         else:
             deviation_score = 1.0
         score_details['deviation'] = deviation_score
         
-        # 2. 岸壁安全裕度评分
+        # 2. 岸壁安全裕度评分（考虑改向角度大会更靠近边界）
         # 计算当前位置到岸线的距离
         dist_to_bank = point_to_line_distance_numba(
             ship_state[0], ship_state[1], line_m, line_b
         )
+        
+        # 考虑改向角度对离岸距离的影响：
+        # 改向角度越大，理论上会更靠近边界，需要在评分中体现这种权衡
+        # 使用一个调节因子：较大的改向角会降低岸壁安全评分
+        angle_penalty = (angle - min_angle) / (max_angle - min_angle) if max_angle > min_angle else 0.0
+        adjusted_dist = dist_to_bank * (1.0 - 0.3 * angle_penalty)  # 最多降低30%
+        
         # 归一化：RR1为0分，RR2为1分，超过RR2更好
-        bank_safety_score = min(1.0, max(0.0, (dist_to_bank - RR1) / (RR2 - RR1)))
+        bank_safety_score = min(1.0, max(0.0, (adjusted_dist - RR1) / (RR2 - RR1)))
         score_details['bank_safety'] = bank_safety_score
         
-        # 3. 避让效果评分（与目标船的距离）
-        # 估算改向后与目标船的距离增加
-        dx = target_state[0] - ship_state[0]
-        dy = target_state[1] - ship_state[1]
-        current_distance = sqrt(dx**2 + dy**2)
-        # 较大的改向角通常能更快拉开距离
-        # 这里简化为：改向角越大，避让效果越好
-        collision_safety_score = (angle - min_angle) / (max_angle - min_angle) if max_angle > min_angle else 0.5
+        # 3. 避让效果评分（基于TCPA和DCPA）
+        # 使用CPA函数计算TCPA和DCPA
+        tcpa, dcpa = CPA(ship_state, target_state)
+        
+        # DCPA评分：DCPA越大越好
+        # 假设安全DCPA阈值为RR1的2倍
+        safe_dcpa_threshold = RR1 * 2.0
+        if dcpa >= safe_dcpa_threshold:
+            dcpa_score = 1.0
+        else:
+            dcpa_score = dcpa / safe_dcpa_threshold
+        
+        # TCPA评分：TCPA越大越好（有更多时间避让）
+        # 假设期望TCPA至少为300秒
+        desired_tcpa = 300.0
+        if tcpa < 0:  # 目标船正在远离
+            tcpa_score = 1.0
+        elif tcpa >= desired_tcpa:
+            tcpa_score = 1.0
+        else:
+            tcpa_score = tcpa / desired_tcpa
+        
+        # 综合TCPA和DCPA评分（DCPA权重更高）
+        collision_safety_score = 0.6 * dcpa_score + 0.4 * tcpa_score
         score_details['collision_safety'] = collision_safety_score
-        
-        # 4. 连续性评分（在连续区间中部的角度得分更高）
-        # 找到该角度所在的连续段
-        continuity_score = 0.0
-        for i, sorted_angle in enumerate(safe_angles_sorted):
-            if sorted_angle == angle:
-                # 找到该角度的连续段
-                start_idx = i
-                end_idx = i
-                # 向前查找连续段起点
-                while start_idx > 0 and safe_angles_sorted[start_idx] - safe_angles_sorted[start_idx-1] == 1:
-                    start_idx -= 1
-                # 向后查找连续段终点
-                while end_idx < len(safe_angles_sorted)-1 and safe_angles_sorted[end_idx+1] - safe_angles_sorted[end_idx] == 1:
-                    end_idx += 1
-                
-                segment_length = end_idx - start_idx + 1
-                position_in_segment = i - start_idx
-                
-                if segment_length == 1:
-                    continuity_score = 0.3  # 孤立点得较低分
-                else:
-                    # 在段中心位置得分最高
-                    center_position = segment_length / 2.0
-                    distance_from_center = abs(position_in_segment - center_position)
-                    continuity_score = 1.0 - (distance_from_center / center_position) * 0.5
-                break
-        
-        score_details['continuity'] = continuity_score
+        score_details['tcpa'] = tcpa
+        score_details['dcpa'] = dcpa
         
         # 计算加权总分
         total_score = (
             weights['deviation'] * deviation_score +
             weights['bank_safety'] * bank_safety_score +
-            weights['collision_safety'] * collision_safety_score +
-            weights['continuity'] * continuity_score
+            weights['collision_safety'] * collision_safety_score
         )
         
         scores[angle] = {
@@ -376,14 +433,16 @@ def strategy_comprehensive_score(
     - 改向成本评分: {optimal_score['details']['deviation']:.3f} (权重{weights['deviation']})
       → 越小的改向角得分越高
     - 岸壁安全评分: {optimal_score['details']['bank_safety']:.3f} (权重{weights['bank_safety']})
-      → 离岸距离越大得分越高
+      → 离岸距离越大得分越高，同时考虑大改向角更靠近边界的影响
     - 避让效果评分: {optimal_score['details']['collision_safety']:.3f} (权重{weights['collision_safety']})
-      → 能更快拉开与目标船距离的角度得分更高
-    - 连续性评分: {optimal_score['details']['continuity']:.3f} (权重{weights['continuity']})
-      → 在连续安全区间中部的角度得分更高
+      → 基于TCPA={optimal_score['details']['tcpa']:.1f}秒 和 DCPA={optimal_score['details']['dcpa']:.1f}米
+      → DCPA越大、TCPA越大，避让效果越好
     
     原理: 综合平衡多个优化目标，找到最佳折中方案
-    优点: 考虑全面，适应性强，可通过调整权重适应不同场景
+    特点: 
+    - 使用TCPA/DCPA精确评估避让效果
+    - 考虑改向角度与岸壁距离的权衡关系
+    - 可通过调整权重适应不同场景
     """
     
     return optimal_angle, explanation, scores

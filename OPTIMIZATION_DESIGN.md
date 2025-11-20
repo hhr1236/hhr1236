@@ -22,7 +22,7 @@
 
 ### 2.1 关键考虑因素
 
-我设计了四个主要的优化维度：
+我设计了三个主要的优化维度：
 
 #### （1）改向成本
 - **定义**：改向角度越大，操纵成本越高
@@ -32,17 +32,15 @@
 #### （2）岸壁安全裕度
 - **定义**：船舶与航道边界的距离
 - **影响**：离岸越远，应对突发情况的余地越大
-- **优化目标**：最大化离岸距离
+- **特别考虑**：改向角度越大，船舶会更靠近边界，需要权衡
+- **优化目标**：最大化离岸距离，同时考虑改向角度的影响
 
-#### （3）避让效果
-- **定义**：改向后与目标船的距离增加速度
-- **影响**：较大的改向角通常能更快拉开距离，更快解除危险
-- **优化目标**：最大化避让效率
-
-#### （4）连续性/鲁棒性
-- **定义**：所选角度在安全区间中的位置
-- **影响**：在连续区间中部的角度，对操作误差的容忍度更高
-- **优化目标**：选择鲁棒性强的角度
+#### （3）避让效果（基于TCPA和DCPA）
+- **定义**：使用TCPA（Time to Closest Point of Approach）和DCPA（Distance at Closest Point of Approach）评估避让效果
+- **TCPA**：到达最近会遇点的时间，越大表示有更多时间避让
+- **DCPA**：最近会遇距离，越大表示避让效果越好
+- **影响**：精确评估与目标船的避让效果
+- **优化目标**：最大化DCPA和TCPA
 
 ### 2.2 为什么这个问题有意义？
 
@@ -168,14 +166,13 @@ def strategy_fastest_return(safe_angles):
 
 #### 评分公式
 ```
-总分 = w1×改向成本评分 + w2×岸壁安全评分 + w3×避让效果评分 + w4×连续性评分
+总分 = w1×改向成本评分 + w2×岸壁安全评分 + w3×避让效果评分
 ```
 
 其中权重默认为：
-- w1 = 0.3（改向成本）
-- w2 = 0.3（岸壁安全）
-- w3 = 0.25（避让效果）
-- w4 = 0.15（连续性）
+- w1 = 0.35（改向成本）
+- w2 = 0.35（岸壁安全）
+- w3 = 0.30（避让效果，基于TCPA/DCPA）
 
 #### 各项评分计算
 
@@ -185,29 +182,35 @@ def strategy_fastest_return(safe_angles):
 deviation_score = 1.0 - (angle - min_angle) / (max_angle - min_angle)
 ```
 
-**2. 岸壁安全评分**
+**2. 岸壁安全评分（考虑改向角度影响）**
 ```python
-# 基于当前离岸距离
+# 基于当前离岸距离，同时考虑改向角度越大会更靠近边界
+angle_penalty = (angle - min_angle) / (max_angle - min_angle)
+adjusted_dist = dist_to_bank * (1.0 - 0.3 * angle_penalty)  # 最多降低30%
+
 # RR1（近距离）为0分，RR2（远距离）为1分
-bank_safety_score = (dist_to_bank - RR1) / (RR2 - RR1)
+bank_safety_score = (adjusted_dist - RR1) / (RR2 - RR1)
 bank_safety_score = max(0.0, min(1.0, bank_safety_score))
 ```
 
-**3. 避让效果评分**
+**3. 避让效果评分（基于TCPA和DCPA）**
 ```python
-# 较大的改向角通常能更快拉开距离
-collision_safety_score = (angle - min_angle) / (max_angle - min_angle)
-```
+# 使用CPA函数计算TCPA和DCPA
+tcpa, dcpa = CPA(ship_state, target_state)
 
-**4. 连续性评分**
-```python
-# 在连续段中心的角度得分最高
-# 找到该角度所在的连续段
-segment_length = ...
-position_in_segment = ...
-center_position = segment_length / 2.0
-distance_from_center = abs(position_in_segment - center_position)
-continuity_score = 1.0 - (distance_from_center / center_position) * 0.5
+# DCPA评分：DCPA越大越好
+safe_dcpa_threshold = RR1 * 2.0
+dcpa_score = min(1.0, dcpa / safe_dcpa_threshold)
+
+# TCPA评分：TCPA越大越好（有更多时间避让）
+desired_tcpa = 300.0  # 期望至少300秒
+if tcpa < 0:  # 目标船正在远离
+    tcpa_score = 1.0
+else:
+    tcpa_score = min(1.0, tcpa / desired_tcpa)
+
+# 综合TCPA和DCPA评分（DCPA权重更高）
+collision_safety_score = 0.6 * dcpa_score + 0.4 * tcpa_score
 ```
 
 #### 适用场景
@@ -216,7 +219,8 @@ continuity_score = 1.0 - (distance_from_center / center_position) * 0.5
 - 希望有灵活的自定义能力
 
 #### 优点
-- 综合考虑多个因素
+- 使用TCPA/DCPA精确评估避让效果
+- 考虑改向角度与岸壁距离的权衡关系
 - 可以通过调整权重适应不同场景
 - 适应性强，鲁棒性好
 
@@ -225,30 +229,27 @@ continuity_score = 1.0 - (distance_from_center / center_position) * 0.5
 **场景1：狭窄水道（优先岸壁安全）**
 ```python
 weights = {
-    'deviation': 0.15,      # 降低
-    'bank_safety': 0.50,    # 提高
-    'collision_safety': 0.25,
-    'continuity': 0.10
+    'deviation': 0.20,      # 降低
+    'bank_safety': 0.55,    # 提高
+    'collision_safety': 0.25
 }
 ```
 
 **场景2：开阔水域（优先最小改向）**
 ```python
 weights = {
-    'deviation': 0.50,      # 提高
+    'deviation': 0.60,      # 提高
     'bank_safety': 0.20,
-    'collision_safety': 0.20,
-    'continuity': 0.10
+    'collision_safety': 0.20
 }
 ```
 
 **场景3：紧急情况（优先快速避让）**
 ```python
 weights = {
-    'deviation': 0.10,
+    'deviation': 0.15,
     'bank_safety': 0.20,
-    'collision_safety': 0.60,  # 提高
-    'continuity': 0.10
+    'collision_safety': 0.65  # 提高
 }
 ```
 
