@@ -50,17 +50,23 @@ scheduler = ShipSchedulerOptimized(
     needs=platform_needs,
     coords=platform_coordinates,
     max_dockings=3,
-    strategy='optimal'  # ← Use MILP optimization
+    strategy='optimal_ships'  # ← Choose optimization strategy
 )
 
 results = scheduler.run()
 ```
 
+### Available Strategies
+
+- **`'optimal_distance'`**: Minimize total distance/dockings (允许多船，优化总距离)
+- **`'optimal_ships'`**: Minimize number of ships used (尽量少用船)
+- **`'greedy'`**: Fast greedy algorithm (快速贪心算法)
+
 ### Compare Strategies
 ```python
 from ship_scheduler_optimized import compare_strategies
 
-# Runs both greedy and MILP, shows comparison
+# Runs greedy, optimal_distance, and optimal_ships, shows comparison
 compare_strategies()
 ```
 
@@ -115,14 +121,15 @@ Result: Proven best solution!
 
 ### Strategy Selection
 ```python
-strategy='greedy'   # Fast (0.1s), local optimum
-strategy='optimal'  # Slower (1-5s), global optimum ← Recommended
+strategy='greedy'            # Fast (0.1s), local optimum
+strategy='optimal_distance'  # MILP optimize distance (1-5s) ← Recommended for efficiency
+strategy='optimal_ships'     # MILP minimize ships (1-5s) ← Recommended for cost savings
 ```
 
 ### Tuning Parameters
 ```python
 MAX_DOCKINGS = 3           # Maximum stops per ship
-SHIP_ACTIVATION_COST = 100000  # Cost to use additional ship
+SHIP_ACTIVATION_COST = 100000  # Cost to use additional ship (only for optimal_ships)
 ```
 
 ### Solver Options
@@ -136,7 +143,8 @@ solver = PULP_CBC_CMD(
 
 On test data (22 tasks, 6 ships):
 - **Greedy**: 6 ships, ~0.1 seconds
-- **MILP**: 4-6 ships (optimal), ~1-5 seconds
+- **MILP optimal_distance**: 6 ships (optimal distance), ~1-5 seconds
+- **MILP optimal_ships**: 4-6 ships (minimum ships), ~1-5 seconds
 
 ## 🆘 Troubleshooting
 

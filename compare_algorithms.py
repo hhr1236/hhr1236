@@ -57,44 +57,64 @@ def main():
     scheduler_greedy.run()
     ships_used_greedy = display_schedule_summary(scheduler_greedy.ship_agents, "Greedy")
     
-    # Test 3: MILP Optimization
+    # Test 3: MILP Optimization - Distance
     print("\n\n" + "#" * 80)
-    print("TEST 3: MILP Global Optimization (from ship_scheduler_optimized.py)")
+    print("TEST 3: MILP Optimization - Minimize Distance (from ship_scheduler_optimized.py)")
     print("#" * 80 + "\n")
     
-    scheduler_optimal = ShipSchedulerOptimized(
+    scheduler_optimal_dist = ShipSchedulerOptimized(
         ships=ship_initial_positions,
         personnel_loc=personnel_locations,
         needs=platform_needs,
         coords=platform_coordinates,
         max_dockings=MAX_DOCKINGS,
-        strategy='optimal'
+        strategy='optimal_distance'
     )
-    scheduler_optimal.run()
-    ships_used_optimal = display_schedule_summary(scheduler_optimal.ship_agents, "MILP Optimal")
+    scheduler_optimal_dist.run()
+    ships_used_optimal_dist = display_schedule_summary(scheduler_optimal_dist.ship_agents, "MILP 优化距离")
+    
+    # Test 4: MILP Optimization - Ships
+    print("\n\n" + "#" * 80)
+    print("TEST 4: MILP Optimization - Minimize Ships (from ship_scheduler_optimized.py)")
+    print("#" * 80 + "\n")
+    
+    scheduler_optimal_ships = ShipSchedulerOptimized(
+        ships=ship_initial_positions,
+        personnel_loc=personnel_locations,
+        needs=platform_needs,
+        coords=platform_coordinates,
+        max_dockings=MAX_DOCKINGS,
+        strategy='optimal_ships'
+    )
+    scheduler_optimal_ships.run()
+    ships_used_optimal_ships = display_schedule_summary(scheduler_optimal_ships.ship_agents, "MILP 最少船只")
     
     # Summary
     print("\n\n" + "=" * 80)
     print(" " * 30 + "FINAL SUMMARY")
     print("=" * 80)
-    print(f"\n{'Algorithm':<30} {'Ships Used':<15} {'Quality':<20}")
+    print(f"\n{'Algorithm':<40} {'Ships Used':<15} {'Objective':<25}")
     print("-" * 80)
     if ships_used_orig:
-        print(f"{'Original Greedy':<30} {ships_used_orig:<15} {'Local optimum':<20}")
-    print(f"{'Simplified Greedy':<30} {ships_used_greedy:<15} {'Local optimum':<20}")
-    print(f"{'MILP Optimization':<30} {ships_used_optimal:<15} {'Global optimum':<20}")
+        print(f"{'Original Greedy':<40} {ships_used_orig:<15} {'Local optimum':<25}")
+    print(f"{'Simplified Greedy':<40} {ships_used_greedy:<15} {'Local optimum':<25}")
+    print(f"{'MILP Optimize Distance':<40} {ships_used_optimal_dist:<15} {'Min distance/dockings':<25}")
+    print(f"{'MILP Minimize Ships':<40} {ships_used_optimal_ships:<15} {'Min ship count':<25}")
     print("=" * 80)
     
     # Improvement calculation
-    if ships_used_greedy > ships_used_optimal:
-        improvement = ((ships_used_greedy - ships_used_optimal) / ships_used_greedy) * 100
-        print(f"\n🎉 IMPROVEMENT: {improvement:.1f}% reduction in ships used!")
-        print(f"   ({ships_used_greedy} → {ships_used_optimal} ships)")
-    elif ships_used_greedy == ships_used_optimal:
-        print(f"\n✓ Both strategies use the same number of ships ({ships_used_optimal})")
+    print("\n策略说明:")
+    print("  - Original/Simplified Greedy: 贪心算法，快速但局部最优")
+    print("  - MILP Optimize Distance: 优化总距离和靠泊次数（允许多船）")
+    print("  - MILP Minimize Ships: 尽可能减少使用的船只数量")
+    
+    if ships_used_optimal_ships < ships_used_greedy:
+        improvement = ((ships_used_greedy - ships_used_optimal_ships) / ships_used_greedy) * 100
+        print(f"\n🎉 IMPROVEMENT: MILP最少船只策略减少了 {improvement:.1f}% 的船只使用!")
+        print(f"   ({ships_used_greedy} → {ships_used_optimal_ships} ships)")
+    elif ships_used_optimal_ships == ships_used_greedy:
+        print(f"\n✓ 贪心和MILP最少船只策略使用相同数量的船只 ({ships_used_optimal_ships})")
         print("  MILP provides mathematical guarantee that this is optimal.")
-    else:
-        print(f"\n⚠️ Note: MILP used more ships due to strict constraints")
     
     print("\n" + "=" * 80)
     print("\nFor detailed explanation, see: SHIP_SCHEDULER_GUIDE.md")

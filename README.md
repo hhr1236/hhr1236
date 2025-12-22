@@ -52,11 +52,17 @@ scheduler = ShipSchedulerOptimized(
     needs=platform_needs,
     coords=platform_coordinates,
     max_dockings=3,
-    strategy='optimal'  # or 'greedy'
+    strategy='optimal_ships'  # 'optimal_distance', 'optimal_ships', or 'greedy'
 )
 
 results = scheduler.run()
 ```
+
+### Optimization Strategies
+
+- **`'optimal_distance'`**: MILP minimizing total distance/dockings (允许多船，优化总距离)
+- **`'optimal_ships'`**: MILP minimizing number of ships used (尽量少用船)
+- **`'greedy'`**: Fast greedy algorithm (快速贪心算法)
 
 ### Run Comparison
 

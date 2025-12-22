@@ -96,26 +96,36 @@ class ShipSchedulerOptimized:
     
     Strategies:
     - 'greedy': Original greedy algorithm (fast, local optimum)
-    - 'optimal': MILP-based optimization (slower, global optimum)
+    - 'optimal_distance': MILP optimization minimizing total distance (允许多船，优化总距离)
+    - 'optimal_ships': MILP optimization minimizing number of ships (尽量少用船)
     """
     
-    def __init__(self, ships, personnel_loc, needs, coords, max_dockings, strategy='optimal'):
+    def __init__(self, ships, personnel_loc, needs, coords, max_dockings, strategy='optimal_distance'):
         self.initial_ships = ships
         self.personnel_loc = personnel_loc
         self.needs = needs
         self.coords = coords
         self.max_dockings = max_dockings
         
-        if strategy not in ['greedy', 'optimal']:
-            raise ValueError("策略必须是 'greedy' 或 'optimal'")
+        if strategy not in ['greedy', 'optimal_distance', 'optimal_ships']:
+            raise ValueError("策略必须是 'greedy', 'optimal_distance' 或 'optimal_ships'")
         
         self.strategy = strategy
-        self.activation_cost = SHIP_ACTIVATION_COST
+        # Set activation cost based on strategy
+        if strategy == 'optimal_ships':
+            self.activation_cost = SHIP_ACTIVATION_COST
+            self.optimization_objective = 'minimize_ships'
+        else:
+            self.activation_cost = 0.0
+            self.optimization_objective = 'minimize_distance'
+        
         self.ship_agents = {}
         
         print(f"\n[INFO] 调度器已初始化, 优化策略: '{self.strategy}'")
-        if strategy == 'optimal':
-            print("[INFO] 使用 MILP 全局优化 - 将寻找最优解")
+        if strategy == 'optimal_distance':
+            print("[INFO] 使用 MILP 全局优化 - 目标: 最小化总距离/靠泊次数")
+        elif strategy == 'optimal_ships':
+            print("[INFO] 使用 MILP 全局优化 - 目标: 最小化使用船只数量")
         else:
             print("[INFO] 使用贪心算法 - 快速但只能找到局部最优")
 
@@ -395,7 +405,7 @@ class ShipSchedulerOptimized:
         """运行调度算法"""
         self._initialize_ship_agents()
         
-        if self.strategy == 'optimal':
+        if self.strategy in ['optimal_distance', 'optimal_ships']:
             # 使用 MILP 优化
             all_tasks = self._generate_all_tasks()
             assignments = self._solve_with_milp(all_tasks)
@@ -530,7 +540,8 @@ def compare_strategies():
     
     results = {}
     
-    for strategy in ['greedy', 'optimal']:
+    # 比较三种策略: greedy, optimal_distance, optimal_ships
+    for strategy in ['greedy', 'optimal_distance', 'optimal_ships']:
         print(f"\n\n{'#' * 80}")
         print(f"{'#' * 30} {strategy.upper()} 策略 {'#' * 30}")
         print(f"{'#' * 80}\n")
@@ -557,14 +568,18 @@ def compare_strategies():
     print(" " * 30 + "对比总结")
     print("=" * 80)
     print(f"\n贪心策略使用船只: {results['greedy']['active_ships']}")
-    print(f"MILP 最优策略使用船只: {results['optimal']['active_ships']}")
+    print(f"MILP 优化距离策略使用船只: {results['optimal_distance']['active_ships']}")
+    print(f"MILP 最少船只策略使用船只: {results['optimal_ships']['active_ships']}")
     
-    if results['optimal']['active_ships'] < results['greedy']['active_ships']:
-        print(f"\n✅ MILP 策略节省了 {results['greedy']['active_ships'] - results['optimal']['active_ships']} 艘船!")
-    elif results['optimal']['active_ships'] == results['greedy']['active_ships']:
-        print(f"\n⚖️ 两种策略使用相同数量的船只")
-    else:
-        print(f"\n⚠️ 注意: MILP 策略使用了更多船只（可能因为约束条件）")
+    print("\n策略说明:")
+    print("  - greedy: 贪心算法，快速但局部最优")
+    print("  - optimal_distance: MILP优化，目标是最小化总距离和靠泊次数")
+    print("  - optimal_ships: MILP优化，目标是尽可能减少使用的船只数量")
+    
+    if results['optimal_ships']['active_ships'] < results['greedy']['active_ships']:
+        print(f"\n✅ MILP最少船只策略节省了 {results['greedy']['active_ships'] - results['optimal_ships']['active_ships']} 艘船!")
+    elif results['optimal_ships']['active_ships'] == results['greedy']['active_ships']:
+        print(f"\n⚖️ 贪心和MILP最少船只策略使用相同数量的船只")
 
 
 if __name__ == '__main__':
