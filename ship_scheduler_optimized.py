@@ -96,8 +96,14 @@ class ShipSchedulerOptimized:
     
     Strategies:
     - 'greedy': Original greedy algorithm (fast, local optimum)
-    - 'optimal_distance': MILP optimization minimizing total distance (允许多船，优化总距离)
-    - 'optimal_ships': MILP optimization minimizing number of ships (尽量少用船)
+    - 'optimal_distance': MILP optimization minimizing total distance + platform visits
+      * 优化"顺路"任务: 通过惩罚平台访问，鼓励任务集中在少数平台
+      * 定义"顺路": 减少访问的平台总数，让每艘船的任务在地理上更集中
+      * 适用场景: 优化运营效率，减少靠泊次数
+    - 'optimal_ships': MILP optimization minimizing number of ships used
+      * 优化"少用船": 通过大幅惩罚船只激活，强制任务集中到更少的船
+      * 即使单船需要跑更远的距离，也优先减少船只数量
+      * 适用场景: 减少人力成本和资源使用
     """
     
     def __init__(self, ships, personnel_loc, needs, coords, max_dockings, strategy='optimal_distance'):
@@ -123,9 +129,11 @@ class ShipSchedulerOptimized:
         
         print(f"\n[INFO] 调度器已初始化, 优化策略: '{self.strategy}'")
         if strategy == 'optimal_distance':
-            print("[INFO] 使用 MILP 全局优化 - 目标: 最小化总距离/靠泊次数")
+            print("[INFO] 使用 MILP 全局优化 - 目标: 最小化总距离 + 平台访问次数")
+            print("      通过惩罚平台访问，鼓励任务'顺路'（集中在少数平台）")
         elif strategy == 'optimal_ships':
-            print("[INFO] 使用 MILP 全局优化 - 目标: 最小化使用船只数量")
+            print("[INFO] 使用 MILP 全局优化 - 目标: 最小化船只数量")
+            print("      通过大幅惩罚船只激活，强制任务集中到更少的船")
         else:
             print("[INFO] 使用贪心算法 - 快速但只能找到局部最优")
 
@@ -231,17 +239,19 @@ class ShipSchedulerOptimized:
         - y[s]: 二进制变量，表示船s是否被激活
         - z[p,s]: 二进制变量，表示平台p是否被船s访问
         
-        目标函数:
-        - 最小化: 总距离成本 + 船只激活成本
+        目标函数 (根据策略不同):
+        - optimal_distance: 最小化总距离 + 平台访问次数（鼓励顺路）
+        - optimal_ships: 最小化激活船只数量 + 总距离（鼓励少用船）
         
         约束:
         1. 每个任务必须分配给恰好一艘船
-        2. 每艘船的停靠平台数不超过最大限制（正确计算唯一平台数）
+        2. 每艘船的停靠平台数不超过最大限制
         3. 船只激活逻辑
         4. 平台访问逻辑
         """
         print("\n" + "=" * 60)
-        print("开始 MILP 全局优化求解")
+        print(f"开始 MILP 全局优化求解 - 策略: {self.strategy}")
+        print(f"优化目标: {self.optimization_objective}")
         print("=" * 60)
         
         # 创建问题
@@ -288,13 +298,42 @@ class ShipSchedulerOptimized:
                 
                 cost_matrix[t_id, s_name] = total_dist * urgency_factor
         
-        # 目标函数: 最小化总成本
-        prob += (
-            lpSum([cost_matrix[t_id, s] * x[t_id, s] 
-                   for t_id in task_ids for s in ships]) +
-            lpSum([self.activation_cost * y[s] for s in ships]),
-            "Total_Cost"
-        )
+        # 根据优化策略构建不同的目标函数
+        if self.optimization_objective == 'minimize_distance':
+            # 策略1: 最小化总距离 + 重点惩罚平台访问（鼓励顺路，减少靠泊次数）
+            # 定义"顺路": 访问的平台越少越好
+            platform_visit_penalty = 50000  # 每个平台访问的惩罚（鼓励任务集中在少数平台）
+            
+            print(f"  目标: 最小化总距离 + 平台访问惩罚 (每个平台访问惩罚: {platform_visit_penalty:,})")
+            
+            prob += (
+                # 主要项: 总距离成本（加权紧急度）
+                lpSum([cost_matrix[t_id, s] * x[t_id, s] 
+                       for t_id in task_ids for s in ships]) +
+                # 重要项: 平台访问惩罚 - 鼓励少访问平台，即任务"顺路"
+                lpSum([platform_visit_penalty * z[p, s] 
+                       for p in platforms for s in ships]),
+                "Total_Cost_MinimizeDistance"
+            )
+            
+        else:  # minimize_ships
+            # 策略2: 最小化船只数量（大惩罚激活船只） + 总距离（次要）
+            # 定义"少用船": 激活的船越少越好，即使单船距离长一些也可以接受
+            
+            # 使用非常大的船只激活成本，远大于任何距离成本
+            # 这样求解器会优先考虑减少船只数量
+            ship_activation_penalty = self.activation_cost  # 100,000
+            
+            print(f"  目标: 最小化船只数量 (船只激活惩罚: {ship_activation_penalty:,}) + 总距离")
+            
+            prob += (
+                # 主要项: 船只激活成本（非常大的惩罚）
+                lpSum([ship_activation_penalty * y[s] for s in ships]) +
+                # 次要项: 总距离成本（相对较小）
+                lpSum([cost_matrix[t_id, s] * x[t_id, s] 
+                       for t_id in task_ids for s in ships]),
+                "Total_Cost_MinimizeShips"
+            )
         
         # 约束1: 每个任务必须分配给恰好一艘船
         for t_id in task_ids:
@@ -362,22 +401,36 @@ class ShipSchedulerOptimized:
         print(f"- 目标函数值: {prob.objective.value():,.0f}")
         print(f"- 激活船只数: {sum(1 for s in ships if y[s].varValue and y[s].varValue > 0.5)}")
         
-        # 验证约束
-        print("\n验证停靠约束:")
+        # 统计平台访问情况
+        total_platform_visits = sum(z[p, s].varValue for p in platforms for s in ships if z[p, s].varValue and z[p, s].varValue > 0.5)
+        print(f"- 总平台访问次数: {int(total_platform_visits)}")
+        
+        # 验证约束和显示详细结果
+        print("\n验证停靠约束和优化效果:")
         for s in ships:
-            visited_platforms = set()
-            for t_id, assigned_ship in assignments.items():
-                if assigned_ship == s:
-                    task = tasks[t_id]
-                    visited_platforms.add(task['origin'])
-                    visited_platforms.add(task['destination'])
-            
-            initial_platforms = self.ship_agents[s]['docked_platforms']
-            new_platforms = visited_platforms - initial_platforms
-            if new_platforms:
-                print(f"  船 '{s}': 访问 {len(new_platforms)} 个新平台 (限制: {self.max_dockings})")
-                if len(new_platforms) > self.max_dockings:
-                    print(f"    ⚠️ 警告: 超出限制!")
+            if y[s].varValue and y[s].varValue > 0.5:
+                visited_platforms = set()
+                assigned_tasks = []
+                for t_id, assigned_ship in assignments.items():
+                    if assigned_ship == s:
+                        task = tasks[t_id]
+                        visited_platforms.add(task['origin'])
+                        visited_platforms.add(task['destination'])
+                        assigned_tasks.append(t_id)
+                
+                initial_platforms = self.ship_agents[s]['docked_platforms']
+                new_platforms = visited_platforms - initial_platforms
+                
+                if new_platforms or assigned_tasks:
+                    print(f"  船 '{s}':")
+                    print(f"    - 分配任务数: {len(assigned_tasks)}")
+                    print(f"    - 访问新平台数: {len(new_platforms)} (限制: {self.max_dockings})")
+                    if len(new_platforms) > self.max_dockings:
+                        print(f"      ⚠️ 警告: 超出限制!")
+                    
+                    # 显示顺路情况（如果是optimize_distance策略）
+                    if self.optimization_objective == 'minimize_distance':
+                        print(f"    - 平台集中度: {len(assigned_tasks)}/{len(new_platforms) if new_platforms else 1:.1f} (任务/平台比)")
         
         return assignments
 

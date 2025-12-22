@@ -60,9 +60,15 @@ results = scheduler.run()
 
 ### Optimization Strategies
 
-- **`'optimal_distance'`**: MILP minimizing total distance/dockings (允许多船，优化总距离)
-- **`'optimal_ships'`**: MILP minimizing number of ships used (尽量少用船)
-- **`'greedy'`**: Fast greedy algorithm (快速贪心算法)
+- **`'optimal_distance'`**: MILP minimizing distance + platform visits
+  - Penalizes platform visits (50,000 per platform) to encourage "顺路" (on-the-way) tasks
+  - Tasks cluster at fewer platforms → fewer dockings, better route efficiency
+  
+- **`'optimal_ships'`**: MILP minimizing number of ships
+  - Large ship activation penalty (100,000 per ship) to force task consolidation
+  - Uses fewer ships even if individual ships travel longer distances
+  
+- **`'greedy'`**: Fast greedy algorithm (local optimum)
 
 ### Run Comparison
 

@@ -58,9 +58,15 @@ results = scheduler.run()
 
 ### Available Strategies
 
-- **`'optimal_distance'`**: Minimize total distance/dockings (允许多船，优化总距离)
-- **`'optimal_ships'`**: Minimize number of ships used (尽量少用船)
-- **`'greedy'`**: Fast greedy algorithm (快速贪心算法)
+- **`'optimal_distance'`**: Minimize distance + platform visits (优化"顺路")
+  - Adds platform visit penalty → tasks cluster at fewer platforms
+  - Better for: reducing docking frequency and operational costs
+  
+- **`'optimal_ships'`**: Minimize number of ships (尽量少用船)
+  - Large ship activation penalty → consolidates tasks on fewer ships
+  - Better for: reducing labor costs and maximizing ship utilization
+  
+- **`'greedy'`**: Fast greedy algorithm (快速但局部最优)
 
 ### Compare Strategies
 ```python
