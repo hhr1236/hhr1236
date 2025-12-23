@@ -4,14 +4,14 @@ import pandas as pd
 from collections import defaultdict
 
 # region Data Definitions
-# 1.1 可用船队及其初始位置
+# 1.1 可用船队及其初始位置和载重量（吨）
 ship_initial_positions = {
-    "铭洋12": {"platform": (13450640.007581526, 4848056.034375883)},  #
-    "海洋石油231": {"platform": (13443914.306586778, 4864560.117847532)},  #
-    "安泉州77": {"platform": (13464242.470120028, 4851553.947134592)},  #
-    "德沣": {"platform": (13447624.362575933, 4854443.73620372)},  #
-    "威尔7": {"platform": (13480357.636204716, 4863420.328046263)},  #
-    "东远503": {"platform": (13446723.008658983, 4866267.795537939)},  #
+    "铭洋12": {"platform": (13450640.007581526, 4848056.034375883), "capacity": 50},
+    "海洋石油231": {"platform": (13443914.306586778, 4864560.117847532), "capacity": 100},
+    "安泉州77": {"platform": (13464242.470120028, 4851553.947134592), "capacity": 80},
+    "德沣": {"platform": (13447624.362575933, 4854443.73620372), "capacity": 60},
+    "威尔7": {"platform": (13480357.636204716, 4863420.328046263), "capacity": 70},
+    "东远503": {"platform": (13446723.008658983, 4866267.795537939), "capacity": 90},
 }
 
 personnel_locations = {
@@ -19,11 +19,25 @@ personnel_locations = {
     "腐蚀检测人员": "K", "人员": "JXB", "4人": "SZ36-10/N",
 }
 
+# 人员重量（吨）- 平均每人0.1吨（包括行李）
+personnel_weights = {
+    "维保人员": 0.1, "后勤厨师": 0.1, "修井监督": 0.1, "油化工程师": 0.1,
+    "腐蚀检测人员": 0.1, "人员": 0.1, "4人": 0.4,  # 4人总共0.4吨
+}
+
 item_locations = {
     "仪表设备": "G", "污水设备2吊": "Q", "样桶分液桶": "K", "油样": "H",
     "油水样": "G", "仪表小件": "O", "修井小件": "A", "钻修机物料": "H",
     "维保小件": "O", "油漆": "M", "制冷剂": "A", "4吊设备": "SZ36-10/N",
     "6分管": "Q", "电仪备件": "Q",
+}
+
+# 物资重量（吨）
+item_weights = {
+    "仪表设备": 5, "污水设备2吊": 10, "样桶分液桶": 2, "油样": 0.5,
+    "油水样": 0.5, "仪表小件": 1, "修井小件": 2, "钻修机物料": 8,
+    "维保小件": 1.5, "油漆": 1, "制冷剂": 0.8, "4吊设备": 15,
+    "6分管": 3, "电仪备件": 2,
 }
 
 platform_needs = {
@@ -50,7 +64,7 @@ platform_coordinates = {
     'LD52': (13445508.24, 4857630.383), 'E': (13450319.72, 4858037.746),
     'J': (13445539.16, 4853839.886), 'C': (13449252.9, 4855464.784),
     'R': (13455681.61, 4891284.077), "SZ36-10/N": (13449133.298273638, 4865627.817903508),
-    "JXA": (13476188.63, 4862683.308)
+    "JXA": (13476188.63, 4862683.308), 'PORT': (13112939.86447716, 4717608.198280469),  # 返港位置
 }
 
 task_urgency_levels = {
@@ -77,13 +91,15 @@ def get_task_urgency(task):
 
 
 class ShipScheduler:
-    def __init__(self, ships, personnel_loc, needs, coords, max_dockings, strategy='default'):
+    def __init__(self, ships, personnel_loc, needs, coords, max_dockings, strategy='default', enable_port_return=False):
         self.initial_ships, self.personnel_loc, self.needs, self.coords, self.max_dockings = ships, personnel_loc, needs, coords, max_dockings
-        if strategy not in ['default', 'minimize_ships']: raise ValueError("策略必须是 'default' 或 'minimize_ships'")
+        if strategy not in ['default', 'minimize_ships', 'return_to_port']: 
+            raise ValueError("策略必须是 'default', 'minimize_ships' 或 'return_to_port'")
         self.strategy = strategy
-        self.activation_cost = SHIP_ACTIVATION_COST if self.strategy == 'minimize_ships' else 0.0
+        self.enable_port_return = enable_port_return or (strategy == 'return_to_port')
+        self.activation_cost = SHIP_ACTIVATION_COST if self.strategy in ['minimize_ships', 'return_to_port'] else 0.0
         self.ship_agents = {}
-        print(f"\n[INFO] 调度器已初始化, 优化策略: '{self.strategy}'")
+        print(f"\n[INFO] 调度器已初始化, 优化策略: '{self.strategy}', 返港功能: {'启用' if self.enable_port_return else '禁用'}")
 
     def _calculate_distance(self, p1, p2):
         def get_coord(point):
@@ -97,6 +113,25 @@ class ShipScheduler:
         coord1, coord2 = get_coord(p1), get_coord(p2)
         if coord1 is None or coord2 is None: return np.inf
         return np.linalg.norm(np.array(coord1) - np.array(coord2))
+
+    def _calculate_task_weight(self, task):
+        """计算任务的重量（吨）"""
+        weight = 0.0
+        if task['type'] == 'PERSONNEL' or task['type'] == 'RETURN':
+            # 从描述中提取人员名称
+            person = task['desc'].replace('运送', '').replace('返回', '').strip()
+            # 尝试从任务描述中找到人员
+            for person_key in personnel_weights.keys():
+                if person_key in task['desc']:
+                    weight += personnel_weights[person_key]
+                    break
+        elif task['type'] == 'CARGO':
+            # 从描述中提取物资名称
+            for item_key in item_weights.keys():
+                if item_key in task['desc']:
+                    weight += item_weights[item_key]
+                    break
+        return weight
 
     def assign_evening_tasks(self, evening_tasks_list):
         print("\n" + "=" * 60 + "\n           开始分配晚间任务 (纯粹就近原则)\n" + "=" * 60)
@@ -138,7 +173,7 @@ class ShipScheduler:
             # 找到最后一个非返回、非晚间的任务
             last_real_task = None
             for task in reversed(agent['assigned_tasks']):
-                if not task.get('is_return_task') and not task.get('is_evening_task'):
+                if not task.get('is_return_task') and not task.get('is_evening_task') and not task.get('is_port_return'):
                     last_real_task = task
                     break
 
@@ -163,6 +198,69 @@ class ShipScheduler:
                         agent['current_platform'] = return_dest  # 逻辑上，船只最终停在返回点
 
                         print(f"  为船只 '{ship_name}' 添加了低优先级返回任务: {last_destination} -> {return_dest}")
+
+    def add_port_return_tasks(self):
+        """
+        添加返港任务。考虑载重约束和渐进式返港路线。
+        """
+        if not self.enable_port_return:
+            print("\n--- 返港功能未启用，跳过返港任务添加 ---")
+            return
+        
+        print("\n" + "=" * 60 + "\n           开始添加返港任务\n" + "=" * 60)
+        
+        for ship_name, agent in self.ship_agents.items():
+            if not agent['assigned_tasks']:
+                print(f"  船只 '{ship_name}' 没有任务，跳过返港规划。")
+                continue
+            
+            # 计算当前载重
+            current_load = agent.get('current_load', 0.0)
+            capacity = self.initial_ships[ship_name]['capacity']
+            
+            # 找到最后一个任务的位置
+            last_task = None
+            for task in reversed(agent['assigned_tasks']):
+                if not task.get('is_port_return'):
+                    last_task = task
+                    break
+            
+            if not last_task:
+                continue
+            
+            last_position = last_task['destination']
+            
+            # 检查载重是否超标
+            if current_load > capacity:
+                print(f"  ⚠️  警告: 船只 '{ship_name}' 当前载重 {current_load:.1f}吨 超过容量 {capacity}吨!")
+                print(f"      需要卸载 {current_load - capacity:.1f}吨 才能安全返港。")
+            
+            # 计算到港口的距离
+            port_distance = self._calculate_distance(last_position, 'PORT')
+            
+            print(f"\n  船只 '{ship_name}':")
+            print(f"    - 最后位置: {last_position}")
+            print(f"    - 当前载重: {current_load:.1f}吨 / {capacity}吨 ({current_load/capacity*100:.1f}%)")
+            print(f"    - 到港口距离: {port_distance:,.0f}")
+            
+            # 添加返港任务
+            port_return_task = {
+                'id': f"PORT_{ship_name}",
+                'type': 'PORT_RETURN',
+                'origin': last_position,
+                'destination': 'PORT',
+                'desc': f"返回港口",
+                'is_port_return': True,
+                'urgency': 100,  # 最低优先级
+            }
+            
+            agent['assigned_tasks'].append(port_return_task)
+            agent['docked_platforms'].add('PORT')
+            agent['current_platform'] = 'PORT'
+            
+            print(f"    ✓ 已添加返港任务: {last_position} -> PORT")
+        
+        print(f"\n返港任务添加完成。")
 
     def _post_assignment_correction(self):
         """
@@ -256,6 +354,7 @@ class ShipScheduler:
         self.ship_agents = {}
         for name, data in self.initial_ships.items():
             initial_coord = data['platform']
+            capacity = data.get('capacity', 100)  # 默认100吨
             # 直接使用坐标作为当前位置，而不是必须匹配平台名称
             # 如果坐标匹配某个平台，则使用平台名称；否则使用坐标本身
             platform_name = next((p_name for p_name, p_coord in self.coords.items() if p_coord == initial_coord), None)
@@ -264,8 +363,15 @@ class ShipScheduler:
             # 初始化停靠平台集合（只有当位置是平台名称时才添加）
             initial_docked = {platform_name} if platform_name else set()
 
-            self.ship_agents[name] = {'id': name, 'current_platform': current_position,
-                                      'docked_platforms': initial_docked, 'assigned_tasks': [], 'is_active': False}
+            self.ship_agents[name] = {
+                'id': name, 
+                'current_platform': current_position,
+                'docked_platforms': initial_docked, 
+                'assigned_tasks': [], 
+                'is_active': False,
+                'capacity': capacity,
+                'current_load': 0.0,  # 当前载重（吨）
+            }
 
         personnel_tasks, p_task_map = self._generate_tasks('PERSONNEL')
         if personnel_tasks:
@@ -407,7 +513,16 @@ class ShipScheduler:
                                                                                                task['destination'])
                 urgency_factor = 0.3 if task.get('urgency') == 1 else 0.6 if task.get('urgency') == 2 else 1.0
                 cost = distance * urgency_factor
-                if self.strategy == 'minimize_ships' and not agent.get('is_active'): cost += self.activation_cost
+                
+                # 如果启用返港策略，考虑任务终点到港口的距离
+                if self.enable_port_return:
+                    port_distance = self._calculate_distance(task['destination'], 'PORT')
+                    # 给予靠近港口的任务轻微的优势（降低10%成本）
+                    port_factor = 1.0 - (0.1 * (1.0 - min(port_distance / 500000.0, 1.0)))  # 归一化距离
+                    cost *= port_factor
+                
+                if self.strategy in ['minimize_ships', 'return_to_port'] and not agent.get('is_active'): 
+                    cost += self.activation_cost
                 cost_matrix.loc[ship_name, t_id] = cost
         return cost_matrix
 
@@ -419,16 +534,28 @@ class ShipScheduler:
             min_cost = dynamic_cost_matrix.min().min()
             ship_name, task_id = dynamic_cost_matrix.stack().idxmin()
             task_to_assign, agent = unassigned_tasks[task_id], self.ship_agents[ship_name]
+            
+            # 计算任务重量
+            task_weight = self._calculate_task_weight(task_to_assign)
+            
             print(
                 f"\n【决策】找到全局最小值: {min_cost:,.0f}\n   >>> 决定将任务 '{task_id}' ({task_details_map.get(task_id, '未知任务')}) 分配给 '{ship_name}'")
+            print(f"   [载重] 任务重量: {task_weight:.1f}吨, 当前载重: {agent['current_load']:.1f}吨 / {agent['capacity']}吨")
+            
             original_platform = agent['current_platform']
-            if self.strategy == 'minimize_ships' and not agent.get('is_active'):
+            if self.strategy in ['minimize_ships', 'return_to_port'] and not agent.get('is_active'):
                 agent['is_active'] = True
                 dynamic_cost_matrix.loc[ship_name] -= self.activation_cost
+            
+            # 更新载重
+            agent['current_load'] += task_weight
+            
             agent['assigned_tasks'].append(task_to_assign)
             agent['docked_platforms'].update({task_to_assign['origin'], task_to_assign['destination']})
             agent['current_platform'] = task_to_assign['destination']
             print(f"   [状态更新] '{ship_name}' 的位置从 '{original_platform}' -> '{agent['current_platform']}'")
+            print(f"   [载重更新] '{ship_name}' 载重: {agent['current_load']:.1f}吨 / {agent['capacity']}吨 ({agent['current_load']/agent['capacity']*100:.1f}%)")
+            
             del unassigned_tasks[task_id]
             dynamic_cost_matrix.drop(columns=[task_id], inplace=True)
             if (len(agent['docked_platforms']) - 1) >= self.max_dockings:
@@ -444,7 +571,7 @@ class ShipScheduler:
                     urgency_factor = 0.3 if rem_task.get('urgency') == 1 else 0.6 if rem_task.get(
                         'urgency') == 2 else 1.0
                     new_cost = new_dist * urgency_factor
-                    if self.strategy == 'minimize_ships' and dynamic_cost_matrix.loc[
+                    if self.strategy in ['minimize_ships', 'return_to_port'] and dynamic_cost_matrix.loc[
                         ship_name, rem_task_id] >= self.activation_cost:
                         dynamic_cost_matrix.loc[ship_name, rem_task_id] = new_cost + self.activation_cost
                     else:
@@ -458,16 +585,21 @@ def display_schedule_summary(final_states, strategy_name):
     for name, agent in final_states.items():
         if not agent['assigned_tasks']: continue
         active_ships += 1
-        daily_docking_count = len({p for t in agent['assigned_tasks'] if not t.get('is_evening_task') for p in
+        daily_docking_count = len({p for t in agent['assigned_tasks'] if not t.get('is_evening_task') and not t.get('is_port_return') for p in
                                    [t.get('origin'), t['destination']] if p}) - 1
         total_docking_count = len(agent['docked_platforms']) - 1
+        current_load = agent.get('current_load', 0.0)
+        capacity = agent.get('capacity', 100)
+        load_percent = (current_load / capacity * 100) if capacity > 0 else 0
+        
         print(f"\n🚢 【{name}】 (日常停靠: {daily_docking_count}/{MAX_DOCKINGS}, 总停靠: {total_docking_count})")
+        print(f"   - 载重状态: {current_load:.1f}吨 / {capacity}吨 ({load_percent:.1f}%) {'⚠️ 超载!' if current_load > capacity else '✓'}")
         print(f"   - 航行足迹: {sorted(list(agent['docked_platforms']))}")
         print("   - 任务清单:")
         sorted_tasks = sorted(agent['assigned_tasks'],
                               key=lambda t: (1 if t.get('is_evening_task') else 0, t.get('urgency', 3)))
         for task in sorted_tasks:
-            prefix = "[晚间]" if task.get('is_evening_task') else "[返程顺路]" if task.get(
+            prefix = "[返港]" if task.get('is_port_return') else "[晚间]" if task.get('is_evening_task') else "[返程顺路]" if task.get(
                 'is_round_trip') else "[通用顺路]" if task.get('is_piggyback') else "[零成本]" if task.get(
                 'is_zero_cost') else "[主线]"
             urgency_symbol = "🔥" if task.get('urgency') == 1 else "⚠️" if task.get('urgency') == 2 else ""
@@ -477,7 +609,7 @@ def display_schedule_summary(final_states, strategy_name):
 
 
 if __name__ == '__main__':
-    for strategy in ['default', 'minimize_ships']:
+    for strategy in ['default', 'minimize_ships', 'return_to_port']:
         scheduler = ShipScheduler(
             ships=ship_initial_positions, personnel_loc=personnel_locations, needs=platform_needs,
             coords=platform_coordinates, max_dockings=MAX_DOCKINGS, strategy=strategy
@@ -485,4 +617,5 @@ if __name__ == '__main__':
         scheduler.run()
         scheduler.add_return_tasks()
         scheduler.assign_evening_tasks(evening_tasks)
+        scheduler.add_port_return_tasks()  # 添加返港任务
         display_schedule_summary(scheduler.ship_agents, f"{strategy} 策略")
