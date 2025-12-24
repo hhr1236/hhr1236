@@ -450,6 +450,10 @@ class ShipScheduler:
                     is_at_origin = True
 
                 if is_at_origin and task not in agent['assigned_tasks']:
+                    # 计算并更新甲板占用
+                    task_deck_area = self._calculate_task_weight(task)
+                    agent['current_load'] = agent.get('current_load', 0.0) + task_deck_area
+                    
                     agent['assigned_tasks'].append({**task, 'is_zero_cost': True})
                     agent['docked_platforms'].update({task['origin'], task['destination']})
                     print(
@@ -467,6 +471,10 @@ class ShipScheduler:
                 for main_task in agent['assigned_tasks']:
                     if main_task.get('is_zero_cost') or main_task.get('is_piggyback'): continue
                     if main_task['origin'] == task_dest and main_task['destination'] == task_origin:
+                        # 计算并更新甲板占用
+                        task_deck_area = self._calculate_task_weight(task)
+                        agent['current_load'] = agent.get('current_load', 0.0) + task_deck_area
+                        
                         agent['assigned_tasks'].append({**task, 'is_piggyback': True, 'is_round_trip': True})
                         agent['docked_platforms'].update({task_origin, task_dest})
                         print(
@@ -490,6 +498,11 @@ class ShipScheduler:
 
                 if task_origin in mainline_platforms or task_dest in mainline_platforms:
                     reason = f"因其计划前往起点'{task_origin}'" if task_origin in mainline_platforms else f"因其计划前往终点'{task_dest}'"
+                    
+                    # 计算并更新甲板占用
+                    task_deck_area = self._calculate_task_weight(task)
+                    agent['current_load'] = agent.get('current_load', 0.0) + task_deck_area
+                    
                     agent['assigned_tasks'].append({**task, 'is_piggyback': True})
                     agent['docked_platforms'].update({task_origin, task_dest})
                     print(f"  [通用顺路] 任务 {task['id']} ({task.get('desc')}) -> 附加给 '{agent['id']}' ({reason})")
