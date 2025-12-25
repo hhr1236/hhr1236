@@ -1,0 +1,14 @@
+# Core dependencies
+numpy>=1.21.0
+
+# PDF processing (optional - choose one)
+PyPDF2>=3.0.0
+# pdfplumber>=0.9.0
+
+# OpenAI for LLM (optional - can work without it)
+# openai>=0.27.0
+
+# For future enhancements
+# langchain>=0.0.200
+# chromadb>=0.3.0
+# sentence-transformers>=2.2.0
