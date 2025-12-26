@@ -385,6 +385,187 @@ def visualize_rudder_speed_space(all_results, pareto_front, best_solution):
 
 
 # ================================================================
+# 轨迹预测与可视化
+# ================================================================
+def generate_trajectory(angle, speed_gear_idx, list_own, list_tar, steps):
+    """
+    生成单个方案的预测轨迹
+    
+    参数:
+        angle: 转向角度
+        speed_gear_idx: 速度档位索引
+        list_own: 本船初始状态 [x, y, heading, ...]
+        list_tar: 目标船初始状态 [x, y, heading, ...]
+        steps: 仿真步数
+    
+    返回:
+        own_trajectory: 本船轨迹 [(x, y), ...]
+        tar_trajectory: 目标船轨迹 [(x, y), ...]
+    """
+    gear_name, gear_value = GEAR_INDEX[speed_gear_idx]
+    
+    # 本船轨迹初始化
+    own_x, own_y = list_own[0], list_own[1]
+    own_heading = list_own[2]
+    own_u = list_own[4]  # 前进速度
+    
+    # 目标船轨迹初始化
+    tar_x, tar_y = list_tar[0], list_tar[1]
+    tar_heading = list_tar[2]
+    tar_u = list_tar[4]
+    
+    own_trajectory = [(own_x, own_y)]
+    tar_trajectory = [(tar_x, tar_y)]
+    
+    # 简化的轨迹预测（实际应使用MMG模型）
+    dt = 1.0  # 时间步长（秒）
+    
+    # 本船转向：逐渐改变航向到目标角度
+    target_heading = own_heading + angle * math.pi / 180
+    
+    for step in range(steps):
+        # 本船运动（简化版）
+        # 航向逐渐变化
+        heading_diff = target_heading - own_heading
+        if abs(heading_diff) > 0.01:
+            own_heading += np.sign(heading_diff) * min(abs(heading_diff), 0.02)
+        
+        # 根据速度档位和航向更新位置
+        own_speed = own_u * gear_value / (85.0/60.0)  # 调整速度
+        own_x += own_speed * math.sin(own_heading) * dt
+        own_y += own_speed * math.cos(own_heading) * dt
+        own_trajectory.append((own_x, own_y))
+        
+        # 目标船运动（保持直线）
+        tar_x += tar_u * math.sin(tar_heading) * dt
+        tar_y += tar_u * math.cos(tar_heading) * dt
+        tar_trajectory.append((tar_x, tar_y))
+    
+    return own_trajectory, tar_trajectory
+
+
+def visualize_trajectories(list_own_initial, list_tar_initial, pareto_front, 
+                           best_solution, bank_p1, bank_p2):
+    """
+    可视化船舶位置和各个方案的预测轨迹
+    """
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # 颜色映射
+    gear_colors = {0: 'red', 1: 'orange', 2: 'green'}
+    gear_labels = {0: '前进三', 1: '前进二', 2: '前进一'}
+    
+    # 绘制航道边界
+    ax.plot([bank_p1[0], bank_p2[0]], [bank_p1[1], bank_p2[1]], 
+            'k--', linewidth=2, label='航道边界', alpha=0.5)
+    
+    # 绘制初始船舶位置
+    own_x, own_y = list_own_initial[0], list_own_initial[1]
+    tar_x, tar_y = list_tar_initial[0], list_tar_initial[1]
+    
+    # 本船（蓝色三角形）
+    own_heading = list_own_initial[2]
+    ship_size = 80
+    ax.scatter([own_x], [own_y], c='blue', s=ship_size*3, marker='^', 
+              edgecolors='black', linewidth=2, label='本船初始位置', zorder=10)
+    
+    # 绘制本船航向指示
+    arrow_length = 200
+    ax.arrow(own_x, own_y, 
+            arrow_length * math.sin(own_heading), 
+            arrow_length * math.cos(own_heading),
+            head_width=50, head_length=80, fc='blue', ec='blue', alpha=0.5)
+    
+    # 目标船（红色三角形）
+    tar_heading = list_tar_initial[2]
+    ax.scatter([tar_x], [tar_y], c='red', s=ship_size*3, marker='^', 
+              edgecolors='black', linewidth=2, label='目标船初始位置', zorder=10)
+    
+    # 绘制目标船航向指示
+    ax.arrow(tar_x, tar_y, 
+            arrow_length * math.sin(tar_heading), 
+            arrow_length * math.cos(tar_heading),
+            head_width=50, head_length=80, fc='red', ec='red', alpha=0.5)
+    
+    # 绘制帕累托前沿方案的预测轨迹
+    if pareto_front:
+        plotted_gears = set()
+        
+        for i, sol in enumerate(pareto_front):
+            gear_idx = list(SPEED_GEARS.keys()).index(sol['speed_gear'])
+            
+            # 生成轨迹
+            own_traj, tar_traj = generate_trajectory(
+                sol['angle'], gear_idx, 
+                list_own_initial, list_tar_initial, 
+                min(sol['steps'], 300)  # 限制显示长度
+            )
+            
+            # 提取坐标
+            own_xs = [p[0] for p in own_traj]
+            own_ys = [p[1] for p in own_traj]
+            
+            # 绘制本船轨迹
+            label = f"{gear_labels[gear_idx]} ({sol['angle']}°)" if gear_idx not in plotted_gears else None
+            ax.plot(own_xs, own_ys, color=gear_colors[gear_idx], 
+                   linewidth=1.5, alpha=0.6, label=label)
+            
+            plotted_gears.add(gear_idx)
+            
+            # 标注轨迹终点
+            ax.scatter([own_xs[-1]], [own_ys[-1]], 
+                      c=gear_colors[gear_idx], s=40, marker='o', 
+                      edgecolors='black', linewidth=0.5, alpha=0.8)
+        
+        # 绘制目标船轨迹（只绘制一次）
+        if pareto_front:
+            sol = pareto_front[0]
+            gear_idx = list(SPEED_GEARS.keys()).index(sol['speed_gear'])
+            _, tar_traj = generate_trajectory(
+                sol['angle'], gear_idx, 
+                list_own_initial, list_tar_initial, 
+                min(sol['steps'], 300)
+            )
+            tar_xs = [p[0] for p in tar_traj]
+            tar_ys = [p[1] for p in tar_traj]
+            ax.plot(tar_xs, tar_ys, 'r--', linewidth=2, alpha=0.5, label='目标船轨迹')
+            ax.scatter([tar_xs[-1]], [tar_ys[-1]], c='red', s=60, marker='s', 
+                      edgecolors='black', linewidth=1)
+    
+    # 高亮显示最优方案轨迹
+    if best_solution:
+        gear_idx = list(SPEED_GEARS.keys()).index(best_solution['speed_gear'])
+        own_traj, _ = generate_trajectory(
+            best_solution['angle'], gear_idx,
+            list_own_initial, list_tar_initial,
+            min(best_solution['steps'], 300)
+        )
+        own_xs = [p[0] for p in own_traj]
+        own_ys = [p[1] for p in own_traj]
+        
+        # 用粗线突出显示最优轨迹
+        ax.plot(own_xs, own_ys, color='purple', linewidth=3, alpha=0.9,
+               label=f'最优方案: {best_solution["angle"]}°, {best_solution["speed_gear"]}',
+               linestyle='-', zorder=5)
+        
+        # 标注最优方案终点
+        ax.scatter([own_xs[-1]], [own_ys[-1]], c='purple', s=200, marker='*',
+                  edgecolors='black', linewidth=2, zorder=10)
+    
+    ax.set_xlabel('X坐标 (m)', fontsize=12)
+    ax.set_ylabel('Y坐标 (m)', fontsize=12)
+    ax.set_title('车舵协同避让轨迹预测图', fontsize=14, fontweight='bold')
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.axis('equal')
+    
+    plt.tight_layout()
+    plt.savefig('trajectory_prediction.png', dpi=150, bbox_inches='tight')
+    print("\n轨迹预测图已保存至: trajectory_prediction.png")
+    plt.show()
+
+
+# ================================================================
 # 主程序示例
 # ================================================================
 if __name__ == '__main__':
@@ -469,6 +650,11 @@ if __name__ == '__main__':
     print("\n正在生成可视化结果...")
     visualize_rudder_speed_space(all_results, pareto_front, best_solution)
     
+    # 步骤5：生成轨迹预测图
+    print("\n正在生成轨迹预测图...")
+    visualize_trajectories(list_own_initial, list_tar_initial, pareto_front, 
+                          best_solution, p1, p2)
+    
     print("\n" + "=" * 80)
     print("Demo运行完成！".center(80))
     print("=" * 80)
@@ -477,3 +663,4 @@ if __name__ == '__main__':
     print("2. 实际使用时，需要将评估函数替换为您的完整仿真代码")
     print("3. 特别注意修改 list_own_ship_initial[11] 来控制速度档位")
     print("4. 可以调整权重来适应不同的决策偏好")
+    print("5. 生成了两张图：决策空间分析图和轨迹预测图")
