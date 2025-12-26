@@ -19,12 +19,10 @@
 ```
 
 ### 📊 多目标优化
-同时优化5个目标：
+同时优化3个目标：
 1. **DCPA** - 最近会遇距离（安全性）
 2. **风险度** - 航道边界风险（合规性）
 3. **避让时间** - 操作效率
-4. **燃油经济性** - 运营成本
-5. **转向角度** - 操作成本
 
 ## 快速开始
 
@@ -58,7 +56,6 @@ Demo输出示例：
   预期DCPA: 89.0 m
   最大风险度: 0.5050
   避让步数: 429
-  燃油因子: 1.167
   综合评分: 0.3891
 ================================================================================
 ```
@@ -105,11 +102,9 @@ pareto_front = find_pareto_front_multi_objective(successful_results)
 #### 4. 加权决策
 ```python
 weights = {
-    'dcpa': 0.30,   # 安全距离
-    'risk': 0.30,   # 风险度
-    'steps': 0.20,  # 避让时间
-    'fuel': 0.10,   # 燃油
-    'angle': 0.10   # 操作成本
+    'dcpa': 0.40,   # 安全距离
+    'risk': 0.35,   # 风险度
+    'steps': 0.25   # 避让时间
 }
 best_solution, score = select_best_solution(pareto_front, weights)
 ```
@@ -120,8 +115,7 @@ best_solution, score = select_best_solution(pareto_front, weights)
 |------|--------|--------|
 | 决策维度 | 1维（角度） | 2维（角度×速度） |
 | 方案数量 | 31 | 93 |
-| 优化目标 | 2个 | 5个 |
-| 是否考虑燃油 | ❌ | ✅ |
+| 优化目标 | 2个 | 3个 |
 | 是否考虑时间 | ✅ | ✅ |
 | 可调整权重 | ✅ | ✅ |
 
@@ -129,19 +123,19 @@ best_solution, score = select_best_solution(pareto_front, weights)
 
 ### 场景1：紧急避让（优先安全）
 ```python
-weights = {'dcpa': 0.50, 'risk': 0.30, 'steps': 0.10, 'fuel': 0.05, 'angle': 0.05}
-# 结果：选择更大的DCPA，可能牺牲燃油和时间
+weights = {'dcpa': 0.50, 'risk': 0.30, 'steps': 0.20}
+# 结果：选择更大的DCPA，确保安全距离
 ```
 
-### 场景2：经济航行（优先节能）
+### 场景2：平衡模式（均衡各项指标）
 ```python
-weights = {'dcpa': 0.20, 'risk': 0.20, 'steps': 0.20, 'fuel': 0.30, 'angle': 0.10}
-# 结果：选择更节能的方案，如前进一或前进二
+weights = {'dcpa': 0.40, 'risk': 0.35, 'steps': 0.25}
+# 结果：在安全、风险和效率之间取得平衡
 ```
 
 ### 场景3：快速避让（优先效率）
 ```python
-weights = {'dcpa': 0.25, 'risk': 0.25, 'steps': 0.40, 'fuel': 0.05, 'angle': 0.05}
+weights = {'dcpa': 0.30, 'risk': 0.30, 'steps': 0.40}
 # 结果：选择更快完成避让的方案，通常是前进三
 ```
 

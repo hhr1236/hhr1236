@@ -7,7 +7,7 @@
 1. 搜索空间：从一维（角度）扩展到二维（角度×速度）
 2. 速度档位：前进三(85/60)、前进二(70/60)、前进一(48/60)
 3. 决策变量：(angle, speed_gear) 组合
-4. 优化目标：DCPA、风险度、避让时间、燃油经济性
+4. 优化目标：DCPA、风险度、避让时间
 """
 
 import numpy as np
@@ -67,7 +67,6 @@ def evaluate_rudder_speed_combination(
     - dcpa: 最近会遇距离（只在成功时有意义）
     - max_risk: 过程中的最大风险度
     - steps: 避让所需步数（时间）
-    - fuel_factor: 燃油因子（速度越高越耗油）
     """
     
     # 获取速度档位信息
@@ -79,9 +78,6 @@ def evaluate_rudder_speed_combination(
     
     # 为了demo演示，这里使用简化的模拟逻辑
     # 实际使用时需替换为你的完整仿真代码
-    
-    # 示例：燃油因子（速度越高，燃油消耗越大）
-    fuel_factor = gear_value  # 可根据实际情况调整公式
     
     # 示例：避让时间（速度越快，避让时间越短，但风险可能增加）
     base_steps = 400
@@ -109,8 +105,7 @@ def evaluate_rudder_speed_combination(
         'status': status,
         'dcpa': dcpa if status == 1 else -1,
         'max_risk': max_risk,
-        'steps': steps,
-        'fuel_factor': fuel_factor
+        'steps': steps
     }
 
 
@@ -185,12 +180,10 @@ def find_pareto_front_multi_objective(successful_results):
     """
     针对车舵协同优化的帕累托筛选
     
-    目标函数（最小化）：
+    目标函数：
     1. max_risk （风险度，越小越好）
-    2. -dcpa （负的DCPA，即最大化DCPA）
+    2. dcpa （DCPA，越大越好）
     3. steps （避让时间，越小越好）
-    4. fuel_factor （燃油消耗，越小越好）
-    5. angle （转向角，越小越好，减少操作成本）
     """
     
     if not successful_results:
@@ -222,19 +215,9 @@ def find_pareto_front_multi_objective(successful_results):
             steps_better = sol_B['steps'] <= sol_A['steps']
             steps_strictly = sol_B['steps'] < sol_A['steps']
             
-            # 目标4：最小化fuel_factor
-            fuel_better = sol_B['fuel_factor'] <= sol_A['fuel_factor']
-            fuel_strictly = sol_B['fuel_factor'] < sol_A['fuel_factor']
-            
-            # 目标5：最小化angle
-            angle_better = sol_B['angle'] <= sol_A['angle']
-            angle_strictly = sol_B['angle'] < sol_A['angle']
-            
             # 检查支配关系
-            all_better_or_equal = (risk_better and dcpa_better and 
-                                   steps_better and fuel_better and angle_better)
-            at_least_one_strictly = (risk_strictly or dcpa_strictly or 
-                                     steps_strictly or fuel_strictly or angle_strictly)
+            all_better_or_equal = (risk_better and dcpa_better and steps_better)
+            at_least_one_strictly = (risk_strictly or dcpa_strictly or steps_strictly)
             
             if all_better_or_equal and at_least_one_strictly:
                 is_dominated = True
@@ -255,11 +238,9 @@ def select_best_solution(pareto_front, weights=None):
     从帕累托前沿中根据权重选择最优解
     
     默认权重：
-    - dcpa: 0.30 （安全距离）
-    - risk: 0.30 （风险度）
-    - steps: 0.20 （避让时间）
-    - fuel: 0.10 （燃油经济性）
-    - angle: 0.10 （操作成本）
+    - dcpa: 0.40 （安全距离）
+    - risk: 0.35 （风险度）
+    - steps: 0.25 （避让时间）
     """
     
     if not pareto_front:
@@ -267,11 +248,9 @@ def select_best_solution(pareto_front, weights=None):
     
     if weights is None:
         weights = {
-            'dcpa': 0.30,
-            'risk': 0.30,
-            'steps': 0.20,
-            'fuel': 0.10,
-            'angle': 0.10
+            'dcpa': 0.40,
+            'risk': 0.35,
+            'steps': 0.25
         }
     
     # 归一化
@@ -284,22 +263,16 @@ def select_best_solution(pareto_front, weights=None):
     dcpas = np.array([s['dcpa'] for s in pareto_front])
     risks = np.array([s['max_risk'] for s in pareto_front])
     steps = np.array([s['steps'] for s in pareto_front])
-    fuels = np.array([s['fuel_factor'] for s in pareto_front])
-    angles = np.array([s['angle'] for s in pareto_front])
     
     norm_dcpas = normalize(dcpas)
     norm_risks = normalize(risks)
     norm_steps = normalize(steps)
-    norm_fuels = normalize(fuels)
-    norm_angles = normalize(angles)
     
     # 计算加权评分（dcpa是收益项，其余是成本项）
     scores = (
         weights['dcpa'] * norm_dcpas -
         weights['risk'] * norm_risks -
-        weights['steps'] * norm_steps -
-        weights['fuel'] * norm_fuels -
-        weights['angle'] * norm_angles
+        weights['steps'] * norm_steps
     )
     
     best_idx = np.argmax(scores)
@@ -462,21 +435,19 @@ if __name__ == '__main__':
         print("帕累托前沿解集（非支配解）")
         print("=" * 80)
         print(f"{'序号':<6}{'角度(°)':<10}{'速度档位':<12}{'DCPA(m)':<12}"
-              f"{'风险度':<12}{'步数':<10}{'燃油因子':<12}")
+              f"{'风险度':<12}{'步数':<10}")
         print("-" * 80)
         for i, sol in enumerate(pareto_front, 1):
             print(f"{i:<6}{sol['angle']:<10}{sol['speed_gear']:<12}"
                   f"{sol['dcpa']:<12.1f}{sol['max_risk']:<12.4f}"
-                  f"{sol['steps']:<10}{sol['fuel_factor']:<12.3f}")
+                  f"{sol['steps']:<10}")
     
     # 步骤3：加权决策
     print("\n正在进行加权决策...")
     decision_weights = {
-        'dcpa': 0.30,
-        'risk': 0.30,
-        'steps': 0.20,
-        'fuel': 0.10,
-        'angle': 0.10
+        'dcpa': 0.40,
+        'risk': 0.35,
+        'steps': 0.25
     }
     
     best_solution, best_score = select_best_solution(pareto_front, decision_weights)
@@ -491,7 +462,6 @@ if __name__ == '__main__':
         print(f"  预期DCPA: {best_solution['dcpa']:.1f} m")
         print(f"  最大风险度: {best_solution['max_risk']:.4f}")
         print(f"  避让步数: {best_solution['steps']}")
-        print(f"  燃油因子: {best_solution['fuel_factor']:.3f}")
         print(f"  综合评分: {best_score:.4f}")
         print("=" * 80)
     
